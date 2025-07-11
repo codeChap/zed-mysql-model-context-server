@@ -1,0 +1,44 @@
+/target
+
+# Environment files
+.env
+.env.local
+.env.production
+.env.development
+*.env
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Personal configuration files
+*-personal.json
+*-local.json
+my-*.json
+personal-*.json
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*.backup
+*.tmp
+
+# Log files
+*.log
+logs/
+
+# Runtime files
+*.pid
+*.seed
+*.pid.lock

@@ -1,0 +1,26 @@
+{
+  "context_servers": {
+    "mysql-context-server": {
+      "command": "cargo",
+      "args": [
+        "run",
+        "--bin",
+        "mcp-server-mysql",
+        "--",
+        "--username",
+        "your_username",
+        "--password",
+        "your_password",
+        "--database",
+        "your_database",
+        "--host",
+        "localhost",
+        "--port",
+        "3306"
+      ],
+      "env": {
+        "RUST_LOG": "info"
+      }
+    }
+  }
+}
