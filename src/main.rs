@@ -1,4 +1,5 @@
 use clap::Parser;
+use log::{debug, info, warn, error};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{MySql, Pool, Row};
@@ -130,6 +131,9 @@ struct SchemaArguments {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize logger
+    env_logger::init();
+
     // Parse command line arguments
     let args = Args::parse();
     
@@ -143,17 +147,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut lines = reader.lines();
 
     // Send logs to stderr to avoid interfering with JSON-RPC communication
-    eprintln!("MCP MySQL Server started and ready to accept connections");
-    eprintln!("Server args: host={}, port={}, username={}, database={}", 
+    info!("MCP MySQL Server started and ready to accept connections");
+    info!("Server args: host={}, port={}, username={}, database={}", 
               args.host, args.port, args.username, args.database);
-    eprintln!("Server PID: {}", std::process::id());
-    eprintln!("Environment variables:");
+    info!("Server PID: {}", std::process::id());
+    debug!("Environment variables:");
     for (key, value) in std::env::vars() {
         if key.contains("MYSQL") || key.contains("DATABASE") || key.contains("MCP") {
-            eprintln!("  {}: {}", key, value);
+            debug!("  {key}: {value}");
         }
     }
-    eprintln!("Current working directory: {:?}", std::env::current_dir());
+    debug!("Current working directory: {:?}", std::env::current_dir());
 
     // Process incoming messages with improved error handling
     loop {
@@ -163,14 +167,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
-                eprintln!("Received message (len={}): {}", line.len(), line);
-                eprintln!("Message bytes: {:?}", line.as_bytes());
+                debug!("Received message (len={}): {}", line.len(), line);
+                debug!("Message bytes: {:?}", line.as_bytes());
                 match serde_json::from_str::<JsonRpcRequest>(&line) {
                     Ok(request) => {
-                        eprintln!("Parsed request: method={}, id={:?}", request.method, request.id);
+                        debug!("Parsed request: method={}, id={:?}", request.method, request.id);
                         // Handle notifications (no response needed)
                         if request.method == "notifications/initialized" || request.method == "initialized" {
-                            eprintln!("Received initialization notification: {}", request.method);
+                            debug!("Received initialization notification: {}", request.method);
                             continue;
                         }
                         
@@ -178,12 +182,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match serde_json::to_string(&response) {
                             Ok(response_str) => {
                                 if let Err(e) = write_response(&mut stdout, &response_str).await {
-                                    eprintln!("Failed to write response: {e}");
+                                    error!("Failed to write response: {e}");
                                     // Continue processing other requests
                                 }
                             }
                             Err(e) => {
-                                eprintln!("Failed to serialize response: {e}");
+                                error!("Failed to serialize response: {e}");
                                 // Send a generic error response
                                 let error_response = create_error_response(None, -32603, "Internal error");
                                 if let Ok(error_str) = serde_json::to_string(&error_response) {
@@ -193,7 +197,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(e) => {
-                        eprintln!("Failed to parse request: {e}");
+                        warn!("Failed to parse request: {e}");
                         let error_response = create_error_response(None, -32700, "Parse error");
                         if let Ok(response_str) = serde_json::to_string(&error_response) {
                             let _ = write_response(&mut stdout, &response_str).await;
@@ -203,14 +207,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(None) => {
                 // stdin closed, this is normal when client disconnects
-                eprintln!("stdin closed - client disconnected, shutting down server");
+                info!("stdin closed - client disconnected, shutting down server");
                 break;
             }
             Err(e) => {
-                eprintln!("Error reading from stdin: {e} (error kind: {:?})", e.kind());
+                warn!("Error reading from stdin: {e} (error kind: {:?})", e.kind());
                 // Add more context about the error
                 if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                    eprintln!("Unexpected EOF - client may have terminated");
+                    info!("Unexpected EOF - client may have terminated");
                     break;
                 }
                 // Continue trying to read in case of transient errors
@@ -219,7 +223,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    eprintln!("MCP MySQL Server shutdown complete");
+    info!("MCP MySQL Server shutdown complete");
     Ok(())
 }
 
@@ -242,17 +246,17 @@ async fn connect_with_retry(database_url: &str) -> Result<Pool<MySql>, Box<dyn s
             .await
         {
             Ok(pool) => {
-                eprintln!("Successfully connected to MySQL database");
+                info!("Successfully connected to MySQL database");
                 return Ok(pool);
             }
             Err(e) => {
                 retry_count += 1;
                 if retry_count >= MAX_RETRIES {
-                    eprintln!("Failed to connect to database after {} retries: {}", MAX_RETRIES, e);
+                    error!("Failed to connect to database after {MAX_RETRIES} retries: {e}");
                     return Err(e.into());
                 }
-                eprintln!("Database connection failed (attempt {}/{}): {}", retry_count, MAX_RETRIES, e);
-                eprintln!("Retrying in {}ms...", RETRY_DELAY_MS);
+                warn!("Database connection failed (attempt {retry_count}/{MAX_RETRIES}): {e}");
+                info!("Retrying in {RETRY_DELAY_MS}ms...");
                 tokio::time::sleep(tokio::time::Duration::from_millis(RETRY_DELAY_MS)).await;
             }
         }
@@ -279,7 +283,7 @@ async fn handle_request(
 ) -> JsonRpcResponse {
     match request.method.as_str() {
         "initialize" => {
-            eprintln!("Handling initialize request with params: {:?}", request.params);
+            debug!("Handling initialize request with params: {:?}", request.params);
 
             // Extract database_url from initializationOptions, fallback to args
             let db_url_from_opts = request
@@ -292,7 +296,7 @@ async fn handle_request(
 
             let database_url = match db_url_from_opts {
                 Some(url) => {
-                    eprintln!("Using database_url from initializationOptions: {}", url);
+                    info!("Using database_url from initializationOptions: {url}");
                     url
                 }
                 None => {
@@ -300,16 +304,16 @@ async fn handle_request(
                         "mysql://{}:{}@{}:{}/{}",
                         args.username, args.password, args.host, args.port, args.database
                     );
-                    eprintln!("Using database_url from command-line arguments: mysql://{}:***@{}:{}/{}", 
+                    info!("Using database_url from command-line arguments: mysql://{}:***@{}:{}/{}", 
                              args.username, args.host, args.port, args.database);
                     url
                 }
             };
 
-            eprintln!("Attempting database connection...");
+            info!("Attempting database connection...");
             match connect_with_retry(&database_url).await {
                 Ok(new_pool) => {
-                    eprintln!("Database connection successful!");
+                    info!("Database connection successful!");
                     *pool = Some(new_pool);
                     JsonRpcResponse {
                         jsonrpc: "2.0".to_string(),
@@ -330,17 +334,17 @@ async fn handle_request(
                     }
                 }
                 Err(e) => {
-                    eprintln!("Database connection failed: {}", e);
+                    error!("Database connection failed: {e}");
                     create_error_response(
                         request.id,
                         -32001,
-                        &format!("Database connection failed: {}", e),
+                        &format!("Database connection failed: {e}"),
                     )
                 }
             }
         }
         "notifications/initialized" | "initialized" => {
-            eprintln!("Client initialized");
+            info!("Client initialized");
             // This is a notification, no response needed - should not reach here
             // since we handle it in main loop
             JsonRpcResponse {
@@ -351,7 +355,7 @@ async fn handle_request(
             }
         }
         "tools/list" => {
-            eprintln!("Listing available tools");
+            debug!("Listing available tools");
             JsonRpcResponse {
                 jsonrpc: "2.0".to_string(),
                 id: request.id,
@@ -382,14 +386,14 @@ async fn handle_request(
                     return create_error_response(request.id, -32002, "Server not initialized");
                 }
             };
-            eprintln!("Handling tool call");
+            debug!("Handling tool call");
             match request.params {
                 Some(params) => match serde_json::from_value::<ToolCallParams>(params) {
                     Ok(tool_params) => {
                         if tool_params.name == "mysql" {
                             match serde_json::from_value::<SchemaArguments>(tool_params.arguments) {
-                                Ok(args) => {
-                                    get_schema(request.id, args.table_name, current_pool).await
+                                Ok(schema_args) => {
+                                    get_schema(request.id, schema_args.table_name, current_pool).await
                                 }
                                 Err(e) => JsonRpcResponse {
                                     jsonrpc: "2.0".to_string(),
@@ -439,7 +443,7 @@ async fn handle_request(
             }
         }
         _ => {
-            eprintln!("Unknown method: {}", request.method);
+            warn!("Unknown method: {}", request.method);
             JsonRpcResponse {
                 jsonrpc: "2.0".to_string(),
                 id: request.id,
@@ -459,13 +463,13 @@ async fn get_schema(
     table_name: String,
     pool: &Pool<MySql>,
 ) -> JsonRpcResponse {
-    eprintln!("Getting schema for: {table_name}");
+    debug!("Getting schema for: {table_name}");
     
     if table_name == "all-tables" {
         // Get all table schemas
         match get_all_table_schemas(pool).await {
             Ok(schemas) => {
-                eprintln!("Successfully retrieved schemas for {} tables", schemas.len());
+                info!("Successfully retrieved schemas for {} tables", schemas.len());
                 JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
                     id,
@@ -480,7 +484,7 @@ async fn get_schema(
                 }
             }
             Err(e) => {
-                eprintln!("Database error getting all table schemas: {e}");
+                error!("Database error getting all table schemas: {e}");
                 JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
                     id,
@@ -497,7 +501,7 @@ async fn get_schema(
         // Get single table schema
         match get_table_schema(pool, &table_name).await {
             Ok(schema) => {
-                eprintln!("Successfully retrieved schema for table '{}'", table_name);
+                info!("Successfully retrieved schema for table '{table_name}'");
                 JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
                     id,
@@ -512,7 +516,7 @@ async fn get_schema(
                 }
             }
             Err(e) => {
-                eprintln!("Database error getting schema for table '{}': {e}", table_name);
+                error!("Database error getting schema for table '{table_name}': {e}");
                 JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
                     id,

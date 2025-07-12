@@ -2,23 +2,11 @@
 
 A Model Context Server for MySQL that integrates with Zed AI assistant.
 
-Adds a `/mysql` slash command to inspect database schemas directly from Zed's Assistant Panel.
-
-**Zed automatically manages the server** - no manual startup required!
-
-## Features
-
-- Inspect MySQL database schemas through `/mysql` commands
-- Retrieve table structure, columns, types, and indexes
-- Get schema information for individual tables or all tables
-- Automatic server lifecycle management by Zed
-- Connection pooling for efficient database access
-
 ## Prerequisites
 
 - Rust (latest stable version)
 - MySQL/MariaDB database
-- Zed editor with MCP support
+- Zed
 
 ## Installation
 
@@ -33,48 +21,24 @@ cargo build --release
 
 ## Configuration
 
-Add to your Zed `settings.json`:
+Click on the "Toggle Agent Menu" -> "Add custom Server"
 
 ```json
 {
-  "context_servers": {
-    "mysql-context-server": {
-      "command": "cargo",
-      "args": [
-        "run",
-        "--bin",
-        "mcp-server-mysql",
-        "--",
-        "--username",
-        "your_username",
-        "--password",
-        "your_password",
-        "--database",
-        "your_database"
-      ],
-      "env": {
-        "RUST_LOG": "info"
-      }
-    }
-  }
-}
-```
-
-For production, use the compiled binary:
-
-```json
-{
-  "context_servers": {
-    "mysql-context-server": {
-      "command": "/path/to/mcp-server-mysql/target/release/mcp-server-mysql",
-      "args": [
+  /// The name of your MCP server
+  "mysql-mcp-server": {
+    /// The command which runs the MCP server
+    "command": "/path/to/mcp-server-mysql/target/release/mcp-server-mysql",
+    /// The arguments to pass to the MCP server
+    "args": [
         "--username", "your_username",
-        "--password", "your_password", 
+        "--password", "your_password",
         "--database", "your_database",
         "--host", "localhost",
         "--port", "3306"
-      ]
-    }
+    ],
+    /// The environment variables to set
+    "env": {}
   }
 }
 ```
@@ -87,26 +51,28 @@ For production, use the compiled binary:
 - `--password <PASSWORD>`: MySQL password (default: empty)
 - `--database <DATABASE>`: MySQL database name (required)
 
-## Usage
+### Logging
 
-Once configured, use these commands in Zed's assistant:
+The server uses standard Rust logging. Control log levels with the `RUST_LOG` environment variable:
 
-- `/mysql users` - Get schema for the users table
-- `/mysql all-tables` - Get schemas for all tables
-- `/mysql orders` - Get schema for the orders table
-
-## Development
+- `RUST_LOG=error` - Only show errors
+- `RUST_LOG=warn` - Show warnings and errors  
+- `RUST_LOG=info` - Show info, warnings and errors (recommended for production)
+- `RUST_LOG=debug` - Show all messages including detailed debug info
 
 ### Testing
 
 Test manually with your database:
 
 ```bash
-# Test initialization
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | cargo run --bin mcp-server-mysql -- --username admin --database mydb
+# Test initialization (with info logging)
+RUST_LOG=info echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | cargo run --bin mcp-server-mysql -- --username admin --database mydb
 
-# Test schema retrieval
+# Test schema retrieval (quiet mode)
 echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mysql","arguments":{"table_name":"users"}}}' | cargo run --bin mcp-server-mysql -- --username admin --database mydb
+
+# Test with debug output (for troubleshooting)
+RUST_LOG=debug echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | cargo run --bin mcp-server-mysql -- --username admin --database mydb
 ```
 
 Or use the test script:
@@ -124,13 +90,6 @@ cargo build
 # Production
 cargo build --release
 ```
-
-## Security
-
-- Only schema inspection (no data modification)
-- Connection pooling with max 5 connections
-- Keep database credentials secure
-- No user data retrieved, only schema information
 
 ## License
 
