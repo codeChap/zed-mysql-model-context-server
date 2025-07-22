@@ -1000,7 +1000,10 @@ async fn execute_query(
                 jsonrpc: "2.0".to_string(),
                 id: Some(id),
                 result: Some(json!({
-                    "success": true,
+                    "content": [{
+                        "type": "text",
+                        "text": format!("Query executed successfully. Retrieved {} rows.", results.len())
+                    }],
                     "rows": results,
                     "row_count": results.len()
                 })),
