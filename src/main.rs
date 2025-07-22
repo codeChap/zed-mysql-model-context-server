@@ -2,7 +2,8 @@ use clap::Parser;
 use log::{debug, info, warn, error};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sqlx::{MySql, Pool, Row};
+use sqlx::{Column, MySql, Pool, Row};
+
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -29,6 +30,10 @@ struct Args {
     /// MySQL database name
     #[arg(long)]
     database: String,
+    
+    /// Allow dangerous SQL keywords in queries (INSERT, UPDATE, DELETE, etc.)
+    #[arg(long, default_value = "false")]
+    allow_dangerous_queries: bool,
 }
 
 // JSON-RPC structures
@@ -129,13 +134,37 @@ struct SchemaArguments {
     table_name: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct QueryArguments {
+    query: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InsertArguments {
+    table_name: String,
+    data: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateArguments {
+    table_name: String,
+    data: serde_json::Value,
+    conditions: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteArguments {
+    table_name: String,
+    conditions: serde_json::Value,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logger
     env_logger::init();
-
-    // Parse command line arguments
+    
     let args = Args::parse();
+    let allow_dangerous_queries = args.allow_dangerous_queries;
     
     // Defer database connection until initialize request is received
     let mut pool: Option<Pool<MySql>> = None;
@@ -178,7 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             continue;
                         }
                         
-                        let response = handle_request(request, &mut pool, &args).await;
+                        let response = handle_request(request, &mut pool, &args, allow_dangerous_queries).await;
                         match serde_json::to_string(&response) {
                             Ok(response_str) => {
                                 if let Err(e) = write_response(&mut stdout, &response_str).await {
@@ -280,6 +309,7 @@ async fn handle_request(
     request: JsonRpcRequest,
     pool: &mut Option<Pool<MySql>>,
     args: &Args,
+    allow_dangerous_queries: bool,
 ) -> JsonRpcResponse {
     match request.method.as_str() {
         "initialize" => {
@@ -355,26 +385,108 @@ async fn handle_request(
             }
         }
         "tools/list" => {
-            debug!("Listing available tools");
-            JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
-                id: request.id,
-                result: Some(json!(ToolsList {
-                    tools: vec![Tool {
-                        name: "mysql".to_string(),
-                        description: "Retrieve MySQL database schema information for tables"
-                            .to_string(),
-                        input_schema: json!({
-                            "type": "object",
-                            "properties": {
-                                "table_name": {
-                                    "type": "string",
-                                    "description": "Name of the table to inspect, or 'all-tables' to get all table schemas"
+    debug!("Listing available tools");
+    JsonRpcResponse {
+        jsonrpc: "2.0".to_string(),
+        id: request.id,
+        result: Some(json!(ToolsList {
+            tools: vec![
+                Tool {
+                    name: "mysql".to_string(),
+                    description: "Retrieve MySQL database schema information for tables"
+                        .to_string(),
+                    input_schema: json!({
+                        "type": "object",
+                        "properties": {
+                            "table_name": {
+                                "type": "string",
+                                "description": "Name of the table to inspect, or 'all-tables' to get all table schemas"
+                            }
+                        },
+                        "required": ["table_name"]
+                    }),
+                },
+                Tool {
+                    name: "query".to_string(),
+                    description: if allow_dangerous_queries {
+                        "Execute any SQL query on the database (unrestricted)".to_string()
+                    } else {
+                        "Execute a SELECT query on the database (read-only)".to_string()
+                    },
+                    input_schema: json!({
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": if allow_dangerous_queries {
+                                    "SQL query to execute"
+                                } else {
+                                    "SELECT query to execute"
                                 }
-                            },
-                            "required": ["table_name"]
-                        }),
-                    }],
+                            }
+                        },
+                        "required": ["query"]
+                    }),
+                },
+                        Tool {
+                            name: "insert".to_string(),
+                            description: "Insert data into a specified table".to_string(),
+                            input_schema: json!({
+                                "type": "object",
+                                "properties": {
+                                    "table_name": {
+                                        "type": "string",
+                                        "description": "Name of the table to insert data into"
+                                    },
+                                    "data": {
+                                        "type": "object",
+                                        "description": "Data to insert as key-value pairs"
+                                    }
+                                },
+                                "required": ["table_name", "data"]
+                            }),
+                        },
+                        Tool {
+                            name: "update".to_string(),
+                            description: "Update data in a specified table based on conditions".to_string(),
+                            input_schema: json!({
+                                "type": "object",
+                                "properties": {
+                                    "table_name": {
+                                        "type": "string",
+                                        "description": "Name of the table to update data in"
+                                    },
+                                    "data": {
+                                        "type": "object",
+                                        "description": "Data to update as key-value pairs"
+                                    },
+                                    "conditions": {
+                                        "type": "object",
+                                        "description": "Conditions for update as key-value pairs"
+                                    }
+                                },
+                                "required": ["table_name", "data", "conditions"]
+                            }),
+                        },
+                        Tool {
+                            name: "delete".to_string(),
+                            description: "Delete data from a specified table based on conditions".to_string(),
+                            input_schema: json!({
+                                "type": "object",
+                                "properties": {
+                                    "table_name": {
+                                        "type": "string",
+                                        "description": "Name of the table to delete data from"
+                                    },
+                                    "conditions": {
+                                        "type": "object",
+                                        "description": "Conditions for deletion as key-value pairs"
+                                    }
+                                },
+                                "required": ["table_name", "conditions"]
+                            }),
+                        },
+                    ],
                 })),
                 error: None,
             }
@@ -390,24 +502,93 @@ async fn handle_request(
             match request.params {
                 Some(params) => match serde_json::from_value::<ToolCallParams>(params) {
                     Ok(tool_params) => {
-                        if tool_params.name == "mysql" {
-                            match serde_json::from_value::<SchemaArguments>(tool_params.arguments) {
-                                Ok(schema_args) => {
-                                    get_schema(request.id, schema_args.table_name, current_pool).await
+                        match tool_params.name.as_str() {
+                            "mysql" => {
+                                match serde_json::from_value::<SchemaArguments>(tool_params.arguments) {
+                                    Ok(schema_args) => {
+                                        get_schema(request.id, schema_args.table_name, current_pool).await
+                                    }
+                                    Err(e) => JsonRpcResponse {
+                                        jsonrpc: "2.0".to_string(),
+                                        id: request.id,
+                                        result: None,
+                                        error: Some(JsonRpcError {
+                                            code: -32602,
+                                            message: format!("Invalid query arguments: {e}"),
+                                            data: None,
+                                        }),
+                                    },
                                 }
-                                Err(e) => JsonRpcResponse {
-                                    jsonrpc: "2.0".to_string(),
-                                    id: request.id,
-                                    result: None,
-                                    error: Some(JsonRpcError {
-                                        code: -32602,
-                                        message: format!("Invalid query arguments: {e}"),
-                                        data: None,
-                                    }),
-                                },
                             }
-                        } else {
-                            JsonRpcResponse {
+                            "query" => {
+                                match serde_json::from_value::<QueryArguments>(tool_params.arguments) {
+                                    Ok(query_args) => {
+                                        execute_query(request.id.clone().unwrap_or(json!(null)), query_args.query, current_pool, allow_dangerous_queries).await
+                                    }
+                                    Err(e) => JsonRpcResponse {
+                                        jsonrpc: "2.0".to_string(),
+                                        id: request.id,
+                                        result: None,
+                                        error: Some(JsonRpcError {
+                                            code: -32602,
+                                            message: format!("Invalid query arguments: {e}"),
+                                            data: None,
+                                        }),
+                                    },
+                                }
+                            }
+                            "insert" => {
+                                match serde_json::from_value::<InsertArguments>(tool_params.arguments) {
+                                    Ok(insert_args) => {
+                                        insert_data(request.id.clone().unwrap_or(json!(null)), insert_args.table_name, insert_args.data, current_pool).await
+                                    }
+                                    Err(e) => JsonRpcResponse {
+                                        jsonrpc: "2.0".to_string(),
+                                        id: request.id,
+                                        result: None,
+                                        error: Some(JsonRpcError {
+                                            code: -32602,
+                                            message: format!("Invalid insert arguments: {e}"),
+                                            data: None,
+                                        }),
+                                    },
+                                }
+                            }
+                            "update" => {
+                                match serde_json::from_value::<UpdateArguments>(tool_params.arguments) {
+                                    Ok(update_args) => {
+                                        update_data(request.id.clone().unwrap_or(json!(null)), update_args.table_name, update_args.data, update_args.conditions, current_pool).await
+                                    }
+                                    Err(e) => JsonRpcResponse {
+                                        jsonrpc: "2.0".to_string(),
+                                        id: request.id,
+                                        result: None,
+                                        error: Some(JsonRpcError {
+                                            code: -32602,
+                                            message: format!("Invalid update arguments: {e}"),
+                                            data: None,
+                                        }),
+                                    },
+                                }
+                            }
+                            "delete" => {
+                                match serde_json::from_value::<DeleteArguments>(tool_params.arguments) {
+                                    Ok(delete_args) => {
+                                        delete_data(request.id.clone().unwrap_or(json!(null)), delete_args.table_name, delete_args.conditions, current_pool).await
+                                    }
+                                    Err(e) => JsonRpcResponse {
+                                        jsonrpc: "2.0".to_string(),
+                                        id: request.id,
+                                        result: None,
+                                        error: Some(JsonRpcError {
+                                            code: -32602,
+                                            message: format!("Invalid delete arguments: {e}"),
+                                            data: None,
+                                        }),
+                                    },
+                                }
+                            }
+                            _ => JsonRpcResponse {
                                 jsonrpc: "2.0".to_string(),
                                 id: request.id,
                                 result: None,
@@ -528,6 +709,307 @@ async fn get_schema(
                     }),
                 }
             }
+        }
+    }
+}
+
+async fn insert_data(
+    id: serde_json::Value,
+    table_name: String,
+    data: serde_json::Value,
+    pool: &Pool<MySql>,
+) -> JsonRpcResponse {
+    let mut conn = match pool.acquire().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            error!("Failed to get connection: {}", e);
+            return create_error_response(Some(id), -32003, &format!("Database connection error: {}", e));
+        }
+    };
+
+    // Validate table name to prevent SQL injection
+    if !table_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return create_error_response(Some(id), -32602, "Invalid table name");
+    }
+
+    // Build the INSERT query with placeholders
+    let data_map = match data.as_object() {
+        Some(map) => map,
+        None => {
+            return create_error_response(Some(id), -32602, "Data must be an object");
+        }
+    };
+
+    if data_map.is_empty() {
+        return create_error_response(Some(id), -32602, "Data object is empty");
+    }
+
+    let columns: Vec<String> = data_map.keys().cloned().collect();
+    let placeholders: Vec<String> = (0..columns.len()).map(|_| "?".to_string()).collect();
+    let query = format!(
+        "INSERT INTO {} ({}) VALUES ({})",
+        table_name,
+        columns.join(", "),
+        placeholders.join(", ")
+    );
+
+    let mut query_builder = sqlx::query(&query);
+    for column in &columns {
+        if let Some(value) = data_map.get(column) {
+            query_builder = query_builder.bind(value);
+        }
+    }
+
+    debug!("Executing insert query: {}", query);
+    match query_builder.execute(&mut *conn).await {
+        Ok(_) => {
+            let last_id: u64 = match sqlx::query_scalar("SELECT LAST_INSERT_ID()")
+                .fetch_one(&mut *conn)
+                .await
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    error!("Failed to get last insert ID: {}", e);
+                    0
+                }
+            };
+            JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id: Some(id),
+                result: Some(json!({
+                    "success": true,
+                    "last_insert_id": last_id
+                })),
+                error: None,
+            }
+        }
+        Err(e) => {
+            error!("Insert failed: {}", e);
+            create_error_response(Some(id), -32004, &format!("Insert failed: {}", e))
+        }
+    }
+}
+
+async fn update_data(
+    id: serde_json::Value,
+    table_name: String,
+    data: serde_json::Value,
+    conditions: serde_json::Value,
+    pool: &Pool<MySql>,
+) -> JsonRpcResponse {
+    let mut conn = match pool.acquire().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            error!("Failed to get connection: {}", e);
+            return create_error_response(Some(id), -32003, &format!("Database connection error: {}", e));
+        }
+    };
+
+    // Validate table name to prevent SQL injection
+    if !table_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return create_error_response(Some(id), -32602, "Invalid table name");
+    }
+
+    // Build the UPDATE query with placeholders
+    let data_map = match data.as_object() {
+        Some(map) => map,
+        None => {
+            return create_error_response(Some(id), -32602, "Data must be an object");
+        }
+    };
+
+    let conditions_map = match conditions.as_object() {
+        Some(map) => map,
+        None => {
+            return create_error_response(Some(id), -32602, "Conditions must be an object");
+        }
+    };
+
+    if data_map.is_empty() {
+        return create_error_response(Some(id), -32602, "Data object is empty");
+    }
+
+    if conditions_map.is_empty() {
+        return create_error_response(Some(id), -32602, "Conditions object is empty");
+    }
+
+    let set_clause: Vec<String> = data_map.keys().map(|k| format!("{} = ?", k)).collect();
+    let where_clause: Vec<String> = conditions_map.keys().map(|k| format!("{} = ?", k)).collect();
+    let query = format!(
+        "UPDATE {} SET {} WHERE {}",
+        table_name,
+        set_clause.join(", "),
+        where_clause.join(" AND ")
+    );
+
+    let mut query_builder = sqlx::query(&query);
+    for key in data_map.keys() {
+        if let Some(value) = data_map.get(key) {
+            query_builder = query_builder.bind(value);
+        }
+    }
+    for key in conditions_map.keys() {
+        if let Some(value) = conditions_map.get(key) {
+            query_builder = query_builder.bind(value);
+        }
+    }
+
+    debug!("Executing update query: {}", query);
+    match query_builder.execute(&mut *conn).await {
+        Ok(result) => {
+            let affected_rows = result.rows_affected();
+            JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id: Some(id),
+                result: Some(json!({
+                    "success": true,
+                    "affected_rows": affected_rows
+                })),
+                error: None,
+            }
+        }
+        Err(e) => {
+            error!("Update failed: {}", e);
+            create_error_response(Some(id), -32004, &format!("Update failed: {}", e))
+        }
+    }
+}
+
+async fn delete_data(
+    id: serde_json::Value,
+    table_name: String,
+    conditions: serde_json::Value,
+    pool: &Pool<MySql>,
+) -> JsonRpcResponse {
+    let mut conn = match pool.acquire().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            error!("Failed to get connection: {}", e);
+            return create_error_response(Some(id), -32003, &format!("Database connection error: {}", e));
+        }
+    };
+
+    // Validate table name to prevent SQL injection
+    if !table_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return create_error_response(Some(id), -32602, "Invalid table name");
+    }
+
+    // Build the DELETE query with placeholders
+    let conditions_map = match conditions.as_object() {
+        Some(map) => map,
+        None => {
+            return create_error_response(Some(id), -32602, "Conditions must be an object");
+        }
+    };
+
+    if conditions_map.is_empty() {
+        return create_error_response(Some(id), -32602, "Conditions object is empty");
+    }
+
+    let where_clause: Vec<String> = conditions_map.keys().map(|k| format!("{} = ?", k)).collect();
+    let query = format!(
+        "DELETE FROM {} WHERE {}",
+        table_name,
+        where_clause.join(" AND ")
+    );
+
+    let mut query_builder = sqlx::query(&query);
+    for key in conditions_map.keys() {
+        if let Some(value) = conditions_map.get(key) {
+            query_builder = query_builder.bind(value);
+        }
+    }
+
+    debug!("Executing delete query: {}", query);
+    match query_builder.execute(&mut *conn).await {
+        Ok(result) => {
+            let affected_rows = result.rows_affected();
+            JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id: Some(id),
+                result: Some(json!({
+                    "success": true,
+                    "affected_rows": affected_rows
+                })),
+                error: None,
+            }
+        }
+        Err(e) => {
+            error!("Delete failed: {}", e);
+            create_error_response(Some(id), -32004, &format!("Delete failed: {}", e))
+        }
+    }
+}
+
+async fn execute_query(
+    id: serde_json::Value,
+    query: String,
+    pool: &Pool<MySql>,
+    allow_dangerous_queries: bool,
+) -> JsonRpcResponse {
+    // Validate queries unless dangerous queries are allowed
+    if !allow_dangerous_queries {
+        // Basic validation - only allow SELECT queries
+        let trimmed_query = query.trim();
+        if !trimmed_query.to_uppercase().starts_with("SELECT") {
+            return create_error_response(Some(id), -32602, "Only SELECT queries are allowed. Use --allow-dangerous-queries flag to execute other query types.");
+        }
+        
+        // Check for potentially dangerous keywords
+        let dangerous_keywords = ["INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "GRANT", "REVOKE"];
+        let query_upper = trimmed_query.to_uppercase();
+        for keyword in &dangerous_keywords {
+            if query_upper.contains(keyword) {
+                return create_error_response(Some(id), -32602, &format!("Query contains forbidden keyword: {}. Use --allow-dangerous-queries flag to allow such queries.", keyword));
+            }
+        }
+    }
+
+    debug!("Executing query: {}", query);
+    
+    match sqlx::query(&query).fetch_all(pool).await {
+        Ok(rows) => {
+            let mut results = Vec::new();
+            
+            for row in rows {
+                let mut row_data = serde_json::Map::new();
+                
+                // Get column names and values
+                for (i, column) in row.columns().iter().enumerate() {
+                    let column_name = column.name();
+                    
+                    // Try to extract value as different types
+                    if let Ok(value) = row.try_get::<Option<String>, _>(i) {
+                        row_data.insert(column_name.to_string(), json!(value));
+                    } else if let Ok(value) = row.try_get::<Option<i64>, _>(i) {
+                        row_data.insert(column_name.to_string(), json!(value));
+                    } else if let Ok(value) = row.try_get::<Option<f64>, _>(i) {
+                        row_data.insert(column_name.to_string(), json!(value));
+                    } else if let Ok(value) = row.try_get::<Option<bool>, _>(i) {
+                        row_data.insert(column_name.to_string(), json!(value));
+                    } else {
+                        // Default to null if we can't determine the type
+                        row_data.insert(column_name.to_string(), json!(null));
+                    }
+                }
+                
+                results.push(json!(row_data));
+            }
+            
+            JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id: Some(id),
+                result: Some(json!({
+                    "success": true,
+                    "rows": results,
+                    "row_count": results.len()
+                })),
+                error: None,
+            }
+        }
+        Err(e) => {
+            error!("Query execution failed: {}", e);
+            create_error_response(Some(id), -32004, &format!("Query execution failed: {}", e))
         }
     }
 }

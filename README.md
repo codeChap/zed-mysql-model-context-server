@@ -43,6 +43,25 @@ Click on the "Toggle Agent Menu" -> "Add custom Server"
 }
 ```
 
+To allow dangerous queries (INSERT, UPDATE, DELETE, etc.), add the flag:
+
+```json
+{
+  "mysql-mcp-server": {
+    "command": "/path/to/mcp-server-mysql/target/release/mcp-server-mysql",
+    "args": [
+        "--username", "your_username",
+        "--password", "your_password",
+        "--database", "your_database",
+        "--host", "localhost",
+        "--port", "3306",
+        "--allow-dangerous-queries"
+    ],
+    "env": {}
+  }
+}
+```
+
 ### Options
 
 - `--host <HOST>`: MySQL host (default: localhost)
@@ -50,6 +69,7 @@ Click on the "Toggle Agent Menu" -> "Add custom Server"
 - `--username <USERNAME>`: MySQL username (required)
 - `--password <PASSWORD>`: MySQL password (default: empty)
 - `--database <DATABASE>`: MySQL database name (required)
+- `--allow-dangerous-queries`: Allow dangerous SQL keywords in queries (INSERT, UPDATE, DELETE, etc.)
 
 ### Logging
 
@@ -89,6 +109,34 @@ cargo build
 
 # Production
 cargo build --release
+```
+
+## Available Tools
+
+The server provides the following tools:
+
+- **mysql**: Retrieve MySQL database schema information for tables
+- **query**: Execute SQL queries (SELECT only by default, all queries with `--allow-dangerous-queries`)
+- **insert**: Insert data into a specified table
+- **update**: Update data in a specified table based on conditions
+- **delete**: Delete data from a specified table based on conditions
+
+### Query Tool Examples
+
+By default, only SELECT queries are allowed:
+
+```sql
+SELECT COUNT(*) as count FROM accounts WHERE primary_category = 'Medical';
+SELECT * FROM users WHERE active = 1 LIMIT 10;
+```
+
+With `--allow-dangerous-queries` flag, you can execute any SQL:
+
+```sql
+CREATE TABLE new_table (id INT PRIMARY KEY, name VARCHAR(255));
+ALTER TABLE users ADD COLUMN last_login TIMESTAMP;
+DROP TABLE old_data;
+TRUNCATE TABLE logs;
 ```
 
 ## License
