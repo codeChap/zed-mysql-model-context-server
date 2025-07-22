@@ -996,16 +996,23 @@ async fn execute_query(
                 results.push(json!(row_data));
             }
             
+            // Format results as a text table for better AI visibility
+            let mut content_text = format!("Query executed successfully. Retrieved {} rows.\n\n", results.len());
+            
+            if !results.is_empty() {
+                // Convert results to a formatted string
+                content_text.push_str("Results:\n");
+                content_text.push_str(&serde_json::to_string_pretty(&results).unwrap_or_else(|_| "Error formatting results".to_string()));
+            }
+            
             JsonRpcResponse {
                 jsonrpc: "2.0".to_string(),
                 id: Some(id),
                 result: Some(json!({
                     "content": [{
                         "type": "text",
-                        "text": format!("Query executed successfully. Retrieved {} rows.", results.len())
-                    }],
-                    "rows": results,
-                    "row_count": results.len()
+                        "text": content_text
+                    }]
                 })),
                 error: None,
             }
