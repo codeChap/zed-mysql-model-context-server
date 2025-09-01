@@ -1025,8 +1025,14 @@ async fn execute_query(
 }
 
 async fn get_table_schema(pool: &Pool<MySql>, table_name: &str) -> Result<Value, sqlx::Error> {
+    let current_db: Option<String> = sqlx::query_scalar("SELECT DATABASE()").fetch_optional(pool).await?;
+    if current_db.is_none() {
+        return Err(sqlx::Error::Configuration("No database selected. Please specify a database to use.".into()));
+    }
+    let current_db = current_db.unwrap();
+    
     // Get table information
-    let table_info_query = format!("SELECT * FROM information_schema.tables WHERE table_name = '{table_name}' AND table_schema = DATABASE()");
+    let table_info_query = format!("SELECT * FROM information_schema.tables WHERE table_name = '{table_name}' AND table_schema = '{current_db}'");
     let table_info = sqlx::query(&table_info_query).fetch_optional(pool).await?;
     
     if table_info.is_none() {
@@ -1037,13 +1043,13 @@ async fn get_table_schema(pool: &Pool<MySql>, table_name: &str) -> Result<Value,
     let columns_query = format!(
         "SELECT column_name, data_type, is_nullable, column_default, column_key, extra, column_comment 
          FROM information_schema.columns 
-         WHERE table_name = '{table_name}' AND table_schema = DATABASE() 
+         WHERE table_name = '{table_name}' AND table_schema = '{current_db}' 
          ORDER BY ordinal_position"
     );
     let columns = sqlx::query(&columns_query).fetch_all(pool).await?;
     
     // Get indexes
-    let indexes_query = format!("SHOW INDEX FROM `{table_name}`");
+    let indexes_query = format!("SHOW INDEX FROM `{current_db}`.`{table_name}`");
     let indexes = sqlx::query(&indexes_query).fetch_all(pool).await?;
     
     let column_info: Vec<Value> = columns
@@ -1081,9 +1087,15 @@ async fn get_table_schema(pool: &Pool<MySql>, table_name: &str) -> Result<Value,
 }
 
 async fn get_all_table_schemas(pool: &Pool<MySql>) -> Result<Vec<Value>, sqlx::Error> {
+    let current_db: Option<String> = sqlx::query_scalar("SELECT DATABASE()").fetch_optional(pool).await?;
+    if current_db.is_none() {
+        return Err(sqlx::Error::Configuration("No database selected. Please specify a database to use.".into()));
+    }
+    let current_db = current_db.unwrap();
+    
     // Get all tables in the current database
-    let tables_query = "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'";
-    let tables = sqlx::query(tables_query).fetch_all(pool).await?;
+    let tables_query = format!("SELECT table_name FROM information_schema.tables WHERE table_schema = '{current_db}' AND table_type = 'BASE TABLE'");
+    let tables = sqlx::query(&tables_query).fetch_all(pool).await?;
     
     let mut schemas = Vec::new();
     for table_row in tables {
